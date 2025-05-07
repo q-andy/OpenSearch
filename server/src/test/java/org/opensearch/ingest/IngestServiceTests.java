@@ -2121,9 +2121,9 @@ public class IngestServiceTests extends OpenSearchSingleNodeTestCase {
         bulkRequest.add(indexRequest3);
 
         List<IngestDocumentWrapper> results = Arrays.asList(
-            new IngestDocumentWrapper(0, IngestService.toIngestDocument(indexRequest1), null),
-            new IngestDocumentWrapper(1, null, new RuntimeException()),
-            new IngestDocumentWrapper(2, null, null)
+            new IngestDocumentWrapper(0, 0, IngestService.toIngestDocument(indexRequest1), null),
+            new IngestDocumentWrapper(1, 0, null, new RuntimeException()),
+            new IngestDocumentWrapper(2, 0, null, null)
         );
         doAnswer(args -> {
             @SuppressWarnings("unchecked")
@@ -2311,7 +2311,7 @@ public class IngestServiceTests extends OpenSearchSingleNodeTestCase {
     private IndexRequestWrapper createIndexRequestWrapper(String index, List<IngestPipelineInfo> pipelineInfoList) {
         IndexRequest indexRequest = new IndexRequest(index);
         DocWriteRequest<?> actionRequest = new IndexRequest(index);
-        return new IndexRequestWrapper(0, indexRequest, actionRequest, pipelineInfoList);
+        return new IndexRequestWrapper(0, 0, indexRequest, actionRequest, pipelineInfoList);
     }
 
     private IngestDocument eqIndexTypeId(final Map<String, Object> source) {
@@ -2834,5 +2834,41 @@ public class IngestServiceTests extends OpenSearchSingleNodeTestCase {
         assertTrue(failureHandler.isEmpty());
         assertTrue(dropHandler.isEmpty());
         assertEquals(1, completionHandler.size());
+    }
+
+    @SuppressForbidden(reason = "feature flag overrides")
+    public void testResolvePipelines_() throws Exception {
+        // mock
+        when(mockIndexBasedProcessorFactory.create(any(), any(), any(), any())).thenReturn(mockIndexBasedProcessor);
+
+        final IngestService ingestService = createIngestServiceWithProcessors();
+        final SystemIngestPipelineCache cache = ingestService.getSystemIngestPipelineCache();
+        final IndexMetadata indexMetadata = spy(
+            IndexMetadata.builder("idx")
+                .settings(settings(Version.CURRENT).put(IndexSettings.DEFAULT_PIPELINE.getKey(), "default-pipeline"))
+                .putMapping("{}")
+                .numberOfShards(1)
+                .numberOfReplicas(0)
+                .putAlias(AliasMetadata.builder("alias").writeIndex(true).build())
+                .build()
+        );
+        final Index index = new Index("idx", "uuid");
+        when(indexMetadata.getIndex()).thenReturn(index);
+        Metadata metadata = Metadata.builder().indices(Map.of("idx", indexMetadata)).build();
+
+        // First time create the pipeline and cache it
+        IndexRequest indexRequest = new IndexRequest("idx");
+        boolean hasPipeline = ingestService.resolvePipelines(indexRequest, indexRequest, metadata);
+        // verify
+        verifyIndexBasedPipelineResolvedSuccessfully(hasPipeline, indexRequest, cache);
+
+        // Second time use the cache directly
+        IndexRequest indexRequest2 = new IndexRequest("idx");
+        boolean hasPipeline2 = ingestService.resolvePipelines(indexRequest2, indexRequest2, metadata);
+        assertTrue(hasPipeline2);
+        assertTrue(indexRequest2.isPipelineResolved());
+        assertEquals("[idx/uuid]", indexRequest2.getSystemIngestPipeline());
+        verify(cache, times(2)).getSystemIngestPipeline(eq("[idx/uuid]"));
+        verifyNoMoreInteractions(cache);
     }
 }

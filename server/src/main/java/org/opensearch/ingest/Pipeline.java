@@ -35,6 +35,8 @@ package org.opensearch.ingest;
 import org.opensearch.OpenSearchParseException;
 import org.opensearch.common.Nullable;
 import org.opensearch.common.metrics.OperationMetrics;
+import org.opensearch.ingest.update_test.TestSystemProcessor;
+import org.opensearch.node.NodeService;
 import org.opensearch.script.ScriptService;
 
 import java.util.ArrayList;
@@ -169,6 +171,8 @@ public final class Pipeline {
                 );
             }
         });
+
+        System.out.println("System Processors: " + processors);
 
         return new Pipeline(id, description, null, new CompoundProcessor(false, processors, Collections.emptyList()));
     }

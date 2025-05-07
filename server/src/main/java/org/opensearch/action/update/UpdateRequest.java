@@ -65,7 +65,9 @@ import org.opensearch.script.ScriptType;
 import org.opensearch.search.fetch.subphase.FetchSourceContext;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.opensearch.action.ValidateActions.addValidationError;
@@ -148,6 +150,7 @@ public class UpdateRequest extends InstanceShardOperationRequest<UpdateRequest>
 
     private IndexRequest upsertRequest;
 
+    // This flag doesn't ever appear to be set properly.
     private boolean scriptedUpsert = false;
     private boolean docAsUpsert = false;
     private boolean detectNoop = true;
@@ -1001,5 +1004,58 @@ public class UpdateRequest extends InstanceShardOperationRequest<UpdateRequest>
             childRequestBytes += upsertRequest.ramBytesUsed();
         }
         return SHALLOW_SIZE + RamUsageEstimator.sizeOf(id) + childRequestBytes;
+    }
+
+    /**
+     * Gets all valid child index requests for the update request,
+     *
+     * @return
+     */
+    public List<IndexRequest> getChildIndexRequests() {
+        List<IndexRequest> childIndexRequests = new ArrayList<>();
+        switch (getType()) {
+            case NORMAL_UPDATE, DOC_AS_UPSERT -> childIndexRequests.add(doc);
+            case NORMAL_UPSERT -> {
+                childIndexRequests.add(doc);
+                childIndexRequests.add(upsertRequest);
+            }
+            case SCRIPTED_UPSERT -> childIndexRequests.add(upsertRequest);
+            // Scripted updates have no child requests
+        }
+        return childIndexRequests;
+    }
+
+    /**
+     * Gets the type of update request, used to determine which pipelines to resolve and execute.
+     * This is calculated dynamically based on what flags and fields are populated.
+     *
+     * @return the type of update request
+     */
+    public UpdateRequest.Type getType() {
+        if (docAsUpsert) {
+            return Type.DOC_AS_UPSERT;
+        } else if (upsertRequest != null && script != null) {
+            return Type.SCRIPTED_UPSERT;
+        } else if (upsertRequest != null && script == null) {
+            return Type.NORMAL_UPSERT;
+        } else if (doc == null && script != null) {
+            return Type.SCRIPTED_UPDATE;
+        }
+
+        // Implicit conditions: doc != null && upsertRequest == null && docAsUpsert == false
+        // script == null is also validated during request parsing
+        return Type.NORMAL_UPDATE;
+    }
+
+    /**
+     * Inner enum to classify the type of update request.
+     */
+    @PublicApi(since="3.1.0")
+    public enum Type {
+        NORMAL_UPDATE,
+        NORMAL_UPSERT,
+        SCRIPTED_UPDATE,
+        SCRIPTED_UPSERT,
+        DOC_AS_UPSERT
     }
 }

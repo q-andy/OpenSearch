@@ -110,6 +110,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.function.LongSupplier;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import static java.util.Collections.emptyMap;
 import static org.opensearch.cluster.metadata.IndexNameExpressionResolver.EXCLUDED_DATA_STREAMS_KEY;
@@ -221,6 +222,8 @@ public class TransportBulkAction extends HandledTransportAction<BulkRequest, Bul
         if (docWriteRequest instanceof IndexRequest) {
             indexRequest = (IndexRequest) docWriteRequest;
         } else if (docWriteRequest instanceof UpdateRequest) {
+            // With the introduction of system pipelines which are resolved for all child documents within an update request,
+            // this method should be avoid being called in a
             UpdateRequest updateRequest = (UpdateRequest) docWriteRequest;
             indexRequest = updateRequest.docAsUpsert() ? updateRequest.doc() : updateRequest.upsertRequest();
         }
@@ -241,6 +244,8 @@ public class TransportBulkAction extends HandledTransportAction<BulkRequest, Bul
     }
 
     protected void doInternalExecute(Task task, BulkRequest bulkRequest, String executorName, ActionListener<BulkResponse> listener) {
+        System.out.println("Starting an internal execute");
+
         final long startTime = relativeTime();
         final AtomicArray<BulkItemResponse> responses = new AtomicArray<>(bulkRequest.requests.size());
 
@@ -248,12 +253,43 @@ public class TransportBulkAction extends HandledTransportAction<BulkRequest, Bul
         final Metadata metadata = clusterService.state().getMetadata();
         final Version minNodeVersion = clusterService.state().getNodes().getMinNodeVersion();
         for (DocWriteRequest<?> actionRequest : bulkRequest.requests) {
-            IndexRequest indexRequest = getIndexWriteRequest(actionRequest);
-            if (indexRequest != null) {
-                indexRequest.setBulkUuid(bulkRequest.getUuid());
-                // Each index request needs to be evaluated, because this method also modifies the IndexRequest
-                boolean indexRequestHasPipeline = ingestService.resolvePipelines(actionRequest, indexRequest, metadata);
+            // Each index request needs to be evaluated, because this method also modifies the IndexRequest
+            if (actionRequest instanceof UpdateRequest updateRequest) {
+                // We all pipelines for upsert and docAsUpsert index requests
+                // For all other update request child index requests, we only resolve system ingest pipelines.
+                // The cases are as follows:
+                // 1. If regular bulk update (no upsert), execute only system pipeline on doc (upsert will be null)
+                // 2. If regular upsert, execute all pipelines on upsert, execute only system pipeline on doc
+                // 3. If scripted upsert, execute all pipelines on upsert (doc will be null)
+                // 4. If doc as upsert, execute all pipelines on doc (upsert will be null)
+                // 5. For regular scripted update, no pipelines will be executed on doc (there is no doc to execute)
+                // Note that when execute pipelines on update existing docs, the full doc is NOT fetched from shard level.
+                // This means the pipeline is only executed on the partial doc, which may not contain all fields.
+                // System ingest pipelines and processors should handle these cases individually.
+                boolean indexRequestHasPipeline = false;
+                switch (updateRequest.getType()) {
+                    case NORMAL_UPDATE -> indexRequestHasPipeline |= ingestService.resolveSystemIngestPipeline(actionRequest, updateRequest.doc(), metadata);
+                    case NORMAL_UPSERT -> {
+                        indexRequestHasPipeline |= ingestService.resolveSystemIngestPipeline(actionRequest, updateRequest.doc(), metadata);
+                        indexRequestHasPipeline |= ingestService.resolvePipelines(actionRequest, updateRequest.upsertRequest(), metadata);
+                    }
+                    case SCRIPTED_UPSERT -> indexRequestHasPipeline |= ingestService.resolvePipelines(actionRequest, updateRequest.upsertRequest(), metadata);
+                    case DOC_AS_UPSERT -> indexRequestHasPipeline |= ingestService.resolvePipelines(actionRequest, updateRequest.doc(), metadata);
+                    // Pure scripted updates have no child index requests, so nothing is resolved.
+                }
                 hasIndexRequestsWithPipelines |= indexRequestHasPipeline;
+
+                for (IndexRequest childIndexRequest : updateRequest.getChildIndexRequests()) {
+                    childIndexRequest.setBulkUuid(bulkRequest.getUuid());
+                }
+            } else {
+                IndexRequest indexRequest = getIndexWriteRequest(actionRequest);
+                // Skip resolving pipelines for delete requests
+                if (indexRequest != null) {
+                    indexRequest.setBulkUuid(bulkRequest.getUuid());
+                    boolean indexRequestHasPipeline = ingestService.resolvePipelines(actionRequest, indexRequest, metadata);
+                    hasIndexRequestsWithPipelines |= indexRequestHasPipeline;
+                }
             }
 
             if (actionRequest instanceof IndexRequest) {
@@ -266,6 +302,7 @@ public class TransportBulkAction extends HandledTransportAction<BulkRequest, Bul
         }
 
         if (hasIndexRequestsWithPipelines) {
+            System.out.println("Index requests have pipelines: " + bulkRequest);
             // this method (doExecute) will be called again, but with the bulk requests updated from the ingest node processing but
             // also with IngestService.NOOP_PIPELINE_NAME on each request. This ensures that this on the second time through this method,
             // this path is never taken.
@@ -273,7 +310,12 @@ public class TransportBulkAction extends HandledTransportAction<BulkRequest, Bul
                 if (Assertions.ENABLED) {
                     final boolean arePipelinesResolved = bulkRequest.requests()
                         .stream()
-                        .map(TransportBulkAction::getIndexWriteRequest)
+                        .flatMap(request -> {
+                            if (request instanceof UpdateRequest updateRequest) {
+                                return updateRequest.getChildIndexRequests().stream();
+                            }
+                            return Stream.of(getIndexWriteRequest(request));
+                        })
                         .filter(Objects::nonNull)
                         .allMatch(IndexRequest::isPipelineResolved);
                     assert arePipelinesResolved : bulkRequest;
