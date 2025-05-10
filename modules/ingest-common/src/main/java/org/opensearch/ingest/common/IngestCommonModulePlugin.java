@@ -47,6 +47,7 @@ import org.opensearch.grok.MatcherWatchdog;
 import org.opensearch.ingest.DropProcessor;
 import org.opensearch.ingest.PipelineProcessor;
 import org.opensearch.ingest.Processor;
+import org.opensearch.ingest.update_test.TestSystemProcessor;
 import org.opensearch.plugins.ActionPlugin;
 import org.opensearch.plugins.IngestPlugin;
 import org.opensearch.plugins.Plugin;
@@ -121,6 +122,14 @@ public class IngestCommonModulePlugin extends Plugin implements ActionPlugin, In
         processors.put(CommunityIdProcessor.TYPE, new CommunityIdProcessor.Factory());
         processors.put(FingerprintProcessor.TYPE, new FingerprintProcessor.Factory());
         return filterForAllowlistSetting(parameters.env.settings(), processors);
+    }
+
+    @Override
+    public Map<String, Processor.Factory> getSystemIngestProcessors(Processor.Parameters parameters) {
+        return Map.of(
+            TestSystemProcessor.Factory.PROCESSOR_FACTORY_TYPE,
+            new TestSystemProcessor.Factory(parameters.scriptService)
+        );
     }
 
     @Override

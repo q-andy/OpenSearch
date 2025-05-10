@@ -668,4 +668,23 @@ public class UpdateRequestTests extends OpenSearchTestCase {
             )
         );
     }
+
+    public void testGetType() {
+        IndexRequest indexRequest = new IndexRequest("test").id("1");
+
+        UpdateRequest request = new UpdateRequest("test", "1").doc(indexRequest);
+        assertEquals(request.getType(), UpdateRequest.Type.NORMAL_UPDATE);
+
+        request = new UpdateRequest("test", "1").script(mockInlineScript("ctx.field = \"foo\""));
+        assertEquals(request.getType(), UpdateRequest.Type.UPDATE_WITH_SCRIPT);
+
+        request = new UpdateRequest("test", "1").upsert(indexRequest);
+        assertEquals(request.getType(), UpdateRequest.Type.NORMAL_UPSERT);
+
+        request = new UpdateRequest("test", "1").upsert(indexRequest).script(mockInlineScript("ctx.field = \"foo\""));
+        assertEquals(request.getType(), UpdateRequest.Type.UPSERT_WITH_SCRIPT);
+
+        request = new UpdateRequest("test", "1").upsert(indexRequest).docAsUpsert(true);
+        assertEquals(request.getType(), UpdateRequest.Type.DOC_AS_UPSERT);
+    }
 }

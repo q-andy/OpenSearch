@@ -22,17 +22,20 @@ public class IndexRequestWrapper {
      * It can be used to map the ingested result or exception to right index request.
      */
     private final int slot;
+    private final int innerSlot;
     private final IndexRequest indexRequest;
     private final DocWriteRequest<?> actionRequest;
     private final List<IngestPipelineInfo> pipelineInfoList;
 
     public IndexRequestWrapper(
         int slot,
+        int innerSlot,
         IndexRequest indexRequest,
         DocWriteRequest<?> actionRequest,
         List<IngestPipelineInfo> pipelineInfoList
     ) {
         this.slot = slot;
+        this.innerSlot = innerSlot;
         this.indexRequest = indexRequest;
         this.actionRequest = actionRequest;
         this.pipelineInfoList = pipelineInfoList;
@@ -40,6 +43,10 @@ public class IndexRequestWrapper {
 
     public int getSlot() {
         return slot;
+    }
+
+    public int getInnerSlot() {
+        return innerSlot;
     }
 
     public IndexRequest getIndexRequest() {

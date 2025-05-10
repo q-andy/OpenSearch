@@ -1313,7 +1313,13 @@ public class IngestServiceTests extends OpenSearchSingleNodeTestCase {
             if (randomBoolean()) {
                 bulkRequest.add(new DeleteRequest("_index", "_id"));
             } else {
-                bulkRequest.add(new UpdateRequest("_index", "_id"));
+                UpdateRequest updateRequest = new UpdateRequest("_index", "_id");
+
+                // We attach a child index request
+                IndexRequest indexRequest = new IndexRequest("_index").id("_id")
+                    .source(Requests.INDEX_CONTENT_TYPE, "field1", "value1");
+                updateRequest.doc(indexRequest);
+                bulkRequest.add(updateRequest);
             }
         }
 
@@ -2120,9 +2126,9 @@ public class IngestServiceTests extends OpenSearchSingleNodeTestCase {
         bulkRequest.add(indexRequest3);
 
         List<IngestDocumentWrapper> results = Arrays.asList(
-            new IngestDocumentWrapper(0, IngestService.toIngestDocument(indexRequest1), null),
-            new IngestDocumentWrapper(1, null, new RuntimeException()),
-            new IngestDocumentWrapper(2, null, null)
+            new IngestDocumentWrapper(0, 0, IngestService.toIngestDocument(indexRequest1), null),
+            new IngestDocumentWrapper(1, 0, null, new RuntimeException()),
+            new IngestDocumentWrapper(2, 0, null, null)
         );
         doAnswer(args -> {
             @SuppressWarnings("unchecked")
@@ -2310,7 +2316,7 @@ public class IngestServiceTests extends OpenSearchSingleNodeTestCase {
     private IndexRequestWrapper createIndexRequestWrapper(String index, List<IngestPipelineInfo> pipelineInfoList) {
         IndexRequest indexRequest = new IndexRequest(index);
         DocWriteRequest<?> actionRequest = new IndexRequest(index);
-        return new IndexRequestWrapper(0, indexRequest, actionRequest, pipelineInfoList);
+        return new IndexRequestWrapper(0, 0, indexRequest, actionRequest, pipelineInfoList);
     }
 
     private IngestDocument eqIndexTypeId(final Map<String, Object> source) {
